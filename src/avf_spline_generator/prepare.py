@@ -13,7 +13,11 @@ from .storage import save_json, slices, tiles
 LOG = logging.getLogger(__name__)
 
 
-def mapped(folder, name, dtype, shape, *, create=False):
+def mapped(folder, name, dtype, shape, *, create=False, storage="dense"):
+    if storage == "compressed" and len(shape) >= 3:
+        from .compressed import work_array
+
+        return work_array(folder, name, dtype, shape, create=create)
     path = folder / (name + ".npy")
     if create:
         return np.lib.format.open_memmap(path, mode="w+", dtype=dtype, shape=tuple(shape))
@@ -23,12 +27,18 @@ def mapped(folder, name, dtype, shape, *, create=False):
     return result
 
 
-def prepare_tracing(native, supplied, folder):
+def flush(array):
+    # Directory-backed Zarr writes chunks synchronously; memmaps need flushing.
+    if hasattr(array, "flush"):
+        array.flush()
+
+
+def prepare_tracing(native, supplied, folder, storage="dense"):
     shape = tuple(n // 2 for n in native.shape)
     marker = folder / "tracing-ready.json"
     if marker.exists():
-        return mapped(folder, "tracing", "u1", (2,) + shape)
-    tracing = mapped(folder, "tracing", "u1", (2,) + shape, create=True)
+        return mapped(folder, "tracing", "u1", (2,) + shape, storage=storage)
+    tracing = mapped(folder, "tracing", "u1", (2,) + shape, create=True, storage=storage)
     for lo, hi in tiles(shape, 64):
         if supplied is not None:
             block = supplied.read(lo, hi)
@@ -44,7 +54,7 @@ def prepare_tracing(native, supplied, folder):
                 block *= 255
             block = np.rint(block).clip(0, 255).astype("u1")
         tracing[(slice(None),) + slices(lo, hi)] = block
-    tracing.flush()
+    flush(tracing)
     save_json(marker, {"complete": True})
     return tracing
 
@@ -76,11 +86,13 @@ def tensor_axes(block, inner):
     return xx, yy
 
 
-def prepare_axes(tracing, folder):
+def prepare_axes(tracing, folder, storage="dense"):
     shape = tracing.shape[1:]
     marker = folder / "axes-ready.json"
     create = not marker.exists()
-    axes = [mapped(folder, name, "u1", shape, create=create) for name in ("nx", "ny")]
+    axes = [
+        mapped(folder, name, "u1", shape, create=create, storage=storage) for name in ("nx", "ny")
+    ]
     if not create:
         return axes
     jobs = list(tiles(shape, 256))
@@ -93,7 +105,7 @@ def prepare_axes(tracing, folder):
             output[slices(start, end)] = values
         LOG.info("Direction field: %d/%d tiles", index + 1, len(jobs))
     for output in axes:
-        output.flush()
+        flush(output)
     save_json(marker, {"complete": True})
     return axes
 
@@ -114,14 +126,14 @@ def centrality_block(presence, nx, ny, device):
     return cent.copy_to_host(), seeds.copy_to_host()
 
 
-def prepare_family(tracing, axes, family, folder, device):
+def prepare_family(tracing, axes, family, folder, device, storage="dense"):
     folder.mkdir(exist_ok=True)
     shape = tracing.shape[1:]
     marker = folder / "fields-ready.json"
     create = not marker.exists()
-    pres = mapped(folder, "presence", "u1", shape, create=create)
-    cent = mapped(folder, "centrality", "u2", shape, create=create)
-    seeds = mapped(folder, "seeds", "u1", shape, create=create)
+    pres = mapped(folder, "presence", "u1", shape, create=create, storage=storage)
+    cent = mapped(folder, "centrality", "u2", shape, create=create, storage=storage)
+    seeds = mapped(folder, "seeds", "u1", shape, create=create, storage=storage)
     if not create:
         return pres, cent, seeds
     for lo, hi in tiles(shape, 128):
@@ -130,7 +142,7 @@ def prepare_family(tracing, axes, family, folder, device):
         p = np.minimum(own.astype("u2") + other, 255).astype("u1")
         p[own < other] = 0
         pres[slices(lo, hi)] = p
-    pres.flush()
+    flush(pres)
     # Even tile origins preserve checkerboard seed parity. Eight halo voxels
     # cover both the centrality stencil and the subsequent ridge test.
     jobs = list(tiles(shape, 128))
@@ -141,8 +153,8 @@ def prepare_family(tracing, axes, family, folder, device):
         cent[slices(start, end)] = cc[inner]
         seeds[slices(start, end)] = ss[inner]
         LOG.info("%s centrality: %d/%d tiles", "VH"[family - 1], index + 1, len(jobs))
-    cent.flush()
-    seeds.flush()
+    flush(cent)
+    flush(seeds)
     save_json(marker, {"complete": True})
     return pres, cent, seeds
 
@@ -169,7 +181,10 @@ def prepare_seeds(cent, seeds, folder, region_size=1024):
             zz, yy, xx = np.where(seeds[z : z + 16] == priority)
             n = len(zz)
             raw[at : at + n] = np.column_stack((zz + z, yy, xx))
-            values[at : at + n] = cent[zz + z, yy, xx]
+            if hasattr(cent, "vindex"):
+                values[at : at + n] = cent.vindex[zz + z, yy, xx]
+            else:
+                values[at : at + n] = cent[zz + z, yy, xx]
             at += n
         # Sort each seed priority by descending centrality.
         order = np.argsort(values[begin : begin + count])[::-1]

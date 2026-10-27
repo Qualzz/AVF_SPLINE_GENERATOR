@@ -49,6 +49,18 @@ def parser():
     p.add_argument("--cuda-device", type=int, default=0, help="Visible CUDA device index")
     p.add_argument("--threads", type=int, default=min(8, get_num_threads()))
     p.add_argument("--native-cache-mib", type=int, default=128)
+    p.add_argument(
+        "--storage",
+        choices=("dense", "compressed"),
+        default="dense",
+        help="Intermediate fields: memory-mapped NPY or sparse lossless Zarr",
+    )
+    p.add_argument(
+        "--field-cache-mib",
+        type=int,
+        default=1024,
+        help="Compressed-mode tracing cache; minimum 16 MiB (default: 1024)",
+    )
     p.add_argument("--version", action="version", version=__version__)
     return p
 
@@ -64,6 +76,12 @@ def run(args):
     if min(args.origin_xyz) < 0 or args.native_cache_mib < 1 or args.cuda_device < 0:
         raise ValueError("Invalid origin, cache size or CUDA device")
     set_num_threads(args.threads)
+    if args.field_cache_mib < 16:
+        raise ValueError("--field-cache-mib must be at least 16")
+    if args.storage == "compressed":
+        from .compressed import dependencies
+
+        dependencies()
     if args.output.exists():
         raise FileExistsError(f"Output already exists: {args.output}")
     native = Predictions(args.predictions, args.array, args.channel_order)
@@ -113,6 +131,7 @@ def run(args):
             "channel_order": args.channel_order,
             "shape": list(native.shape),
             "device": args.device,
+            "storage": args.storage,
             "family": args.family,
             "voxel_size_um": args.voxel_size_um,
             "origin_xyz": list(args.origin_xyz),
@@ -124,7 +143,11 @@ def run(args):
         if manifest.exists():
             if not args.resume:
                 raise ValueError("Work directory already contains a run; use --resume")
-            if json.loads(manifest.read_text()) != config:
+            saved = json.loads(manifest.read_text())
+            # Release 0.1.0 only had dense fields and the same numerical core.
+            if saved.get("version") == "0.1.0" and "storage" not in saved:
+                saved = dict(saved, version=__version__, storage="dense")
+            if saved != config:
                 raise ValueError("Inputs or tracing settings changed; use a new work directory")
         else:
             if args.resume:
@@ -133,12 +156,21 @@ def run(args):
                 raise ValueError("A new run requires an empty work directory")
             save_json(manifest, config)
         LOG.info("Preparing tracing predictions")
-        tracing = prepare_tracing(native, supplied, work)
-        axes = prepare_axes(tracing, work)
+        tracing = prepare_tracing(native, supplied, work, args.storage)
+        axes = prepare_axes(tracing, work, args.storage)
         sampler = NativeSampler(native, cache_mib=args.native_cache_mib)
         families = (1, 2) if args.family == "both" else ({"V": 1, "H": 2}[args.family],)
         for family in families:
-            trace_family(tracing, axes, family, work / f"family-{family}", sampler, args.device)
+            trace_family(
+                tracing,
+                axes,
+                family,
+                work / f"family-{family}",
+                sampler,
+                args.device,
+                args.storage,
+                args.field_cache_mib,
+            )
         summary = export_afv(
             iter_curves(work, families),
             output,

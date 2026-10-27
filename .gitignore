@@ -11,3 +11,4 @@ dist/
 *.npy
 *.npz
 *.zarr/
+.pytest_cache/

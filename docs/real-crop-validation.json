@@ -1,0 +1,118 @@
+{
+  "passed": true,
+  "prepared_fields_bitwise_equal": true,
+  "seed_order_identical": true,
+  "raw_and_fitted_geometry_bitwise_equal": true,
+  "afv_geometry_records_identical": true,
+  "input_unchanged": true,
+  "crop": {
+    "checkpoint_step": 29220,
+    "native_origin_zyx": [
+      4090,
+      6344,
+      3766
+    ],
+    "native_shape_zyx": [
+      96,
+      128,
+      384
+    ],
+    "native_um": 8.64,
+    "files": {
+      "semantic": {
+        "shape": [
+          2,
+          96,
+          128,
+          384
+        ],
+        "sha256": "5587c1840d2d0ffb592506b7e69df425f45a4ef40e071e3181c8d790654c80f1",
+        "bytes": 9437312,
+        "nonzero": 1978497
+      },
+      "tracing": {
+        "shape": [
+          2,
+          48,
+          64,
+          192
+        ],
+        "sha256": "1071185aed85812fddb78b9d203410211aaf7be8587ea9cfd4dda88dc501f31d",
+        "bytes": 1179776,
+        "nonzero": 278191
+      }
+    }
+  },
+  "measurements": {
+    "dense": {
+      "seconds": 1.4255300249787979,
+      "summary": {
+        "complete": true,
+        "fiber_count": 184,
+        "point_count": 9946,
+        "block_count": 184
+      },
+      "scratch_bytes": 11204436,
+      "voxel_field_bytes": 10618752
+    },
+    "compressed": {
+      "seconds": 161.65012937400024,
+      "summary": {
+        "complete": true,
+        "fiber_count": 184,
+        "point_count": 9946,
+        "block_count": 184
+      },
+      "scratch_bytes": 2962989,
+      "voxel_field_bytes": 2377066
+    }
+  },
+  "environment": {
+    "python": "3.12.8",
+    "numpy": "2.4.3",
+    "scipy": "1.17.1",
+    "numba": "0.64.0",
+    "zarr": "2.18.7",
+    "numcodecs": "0.15.1"
+  },
+  "notes": "Small real crop, CPU centrality, 16 MiB field cache. Not a full-scroll throughput benchmark. File bytes exclude filesystem metadata and input/output files.",
+  "baseline_commit": "3c8b73628ca56cb28042b9b2e79439b2e1c693d2",
+  "unchanged_sources": {
+    "core.py": "1bd16ef7ef1156e0657b2db541290b76af22632102bd0d4742be7013707e0364",
+    "cuda.py": "92f4d151cb291fbfbe07e5ad56fc6ee470f8e32c948b27c5b226b0b15d3e3610",
+    "afv.py": "9d2a1f75d30f63c8cbfa14ad465ca0ac2240ed58dc7f960c2c71f42f453ac30d"
+  },
+  "measurement_notes": [
+    "Scratch sizes are logical bytes in files, including seed catalogues and saved curves, excluding input probabilities, output AFVs and filesystem metadata.",
+    "The forced-eviction run deliberately used a one-tile (16 MiB) cache; its time is not a representative speed comparison.",
+    "Mutable coverage files are expendable and rebuilt from committed paths on resume. Only evicted cache pages need to reside on disk."
+  ],
+  "normal_cache_checks": [
+    {
+      "name": "normal-cache",
+      "seconds": 19.354337788012344,
+      "cache_mib": 64,
+      "afv_geometry_records_identical": true,
+      "summary": {
+        "complete": true,
+        "fiber_count": 184,
+        "point_count": 9946,
+        "block_count": 184
+      },
+      "notes": "First run includes adapter JIT compilation; second run in same process reuses compiled functions. Small crop, not full-scroll throughput."
+    },
+    {
+      "name": "normal-cache-warm",
+      "seconds": 2.0403425720287487,
+      "cache_mib": 64,
+      "afv_geometry_records_identical": true,
+      "summary": {
+        "complete": true,
+        "fiber_count": 184,
+        "point_count": 9946,
+        "block_count": 184
+      },
+      "notes": "First run includes adapter JIT compilation; second run in same process reuses compiled functions. Small crop, not full-scroll throughput."
+    }
+  ]
+}
