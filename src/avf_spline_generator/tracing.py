@@ -26,12 +26,17 @@ def valid_segments(points, tracing, family, native):
             ids = all_ids[start : start + max(1, 32768 // (int(n) + 1))]
             t = np.linspace(0, 1, int(n) + 1, dtype="f4")
             q = (points[ids, None] + delta[ids, None] * t[None, :, None]).reshape(-1, 3)
-            values = [
-                map_coordinates(
-                    field, q[:, ::-1].T, order=1, prefilter=False, mode="nearest", output="f4"
-                )
-                for field in tracing
-            ]
+            if hasattr(tracing, "chunks"):
+                from .compressed import sample_tracing
+
+                values = sample_tracing(tracing, q)
+            else:
+                values = [
+                    map_coordinates(
+                        field, q[:, ::-1].T, order=1, prefilter=False, mode="nearest", output="f4"
+                    )
+                    for field in tracing
+                ]
             good = values[family - 1] + 1e-4 >= values[2 - family]
             v = native.sample(q * 2 + 0.5)
             good &= v[:, family - 1] + 1e-4 >= v[:, 2 - family]
@@ -45,7 +50,7 @@ def pack(curves):
     return points, offsets
 
 
-def finish(points, offsets, tracing, presence, family, native):
+def finish(points, offsets, tracing, presence, family, native, cache=None):
     pieces = []
     for a, b in zip(offsets[:-1], offsets[1:]):
         p = points[a:b]
@@ -56,6 +61,8 @@ def finish(points, offsets, tracing, presence, family, native):
     raw, raw_offsets = pack(pieces)
     if not pieces:
         return raw, raw_offsets
+    if cache is not None:
+        presence = cache.presence_snapshot(raw)
     smoothed, counts = core.fit_and_resample_splines(
         raw,
         raw_offsets,
@@ -82,21 +89,74 @@ def finish(points, offsets, tracing, presence, family, native):
     return pack(pieces)
 
 
-def trace_family(tracing, axes, family, folder, native, device):
+def trace_family(tracing, axes, family, folder, native, device, storage="dense", cache_mib=1024):
     progress_path = folder / "progress.json"
     state = {"next_seed": 0, "parts": 0, "complete": False}
     if progress_path.exists():
         state = json.loads(progress_path.read_text())
         if state["complete"]:
             return
-    presence, cent, seeds = prepare_family(tracing, axes, family, folder, device)
+    presence, cent, seeds = prepare_family(tracing, axes, family, folder, device, storage)
     coordinates, catalog = prepare_seeds(cent, seeds, folder)
     if not 0 <= state["next_seed"] <= catalog["total"]:
         raise ValueError("Invalid saved seed position")
     coverage = [
-        mapped(folder, n, "u1", presence.shape, create=True)
+        mapped(folder, n, "u1", presence.shape, create=True, storage=storage)
         for n in ("coverage", "coverage_nx", "coverage_ny")
     ]
+    cache = None
+    try:
+        if storage == "compressed":
+            from .compressed import ResidentFields
+
+            cache = ResidentFields(cent, presence, axes, coverage, cache_mib=cache_mib)
+            cent, presence, nx, ny, *coverage = cache.arrays()
+            axes = (nx, ny)
+        _trace_prepared(
+            tracing,
+            axes,
+            family,
+            folder,
+            native,
+            presence,
+            cent,
+            coordinates,
+            catalog,
+            coverage,
+            state,
+            progress_path,
+            cache,
+        )
+    finally:
+        if cache is not None:
+            save_json(
+                folder / "cache-stats.json",
+                {
+                    "cache_bytes": sum(a.nbytes for a in cache.data),
+                    "loads": cache.loads,
+                    "evictions": cache.evictions,
+                    "storage": "compressed",
+                    "tile_size": cache.chunk,
+                },
+            )
+            cache.close()
+
+
+def _trace_prepared(
+    tracing,
+    axes,
+    family,
+    folder,
+    native,
+    presence,
+    cent,
+    coordinates,
+    catalog,
+    coverage,
+    state,
+    progress_path,
+    cache,
+):
     # Rebuild from committed raw curves. Mutable coverage may contain an
     # interrupted batch and must never be used as the restart checkpoint.
     for index in range(state["parts"]):
@@ -125,6 +185,8 @@ def trace_family(tracing, axes, family, folder, native, device):
         begin = max(start, state["next_seed"])
         if begin >= end:
             continue
+        if cache is not None:
+            cache.pin_region(region)
         primary_end = start + catalog["primary_counts"][region]
         # These are views of one global coordinate catalogue. Coverage and
         # prediction arrays cover the entire volume, including other regions.
@@ -161,6 +223,7 @@ def trace_family(tracing, axes, family, folder, native, device):
                     presence,
                     family,
                     native,
+                    cache,
                 )
                 save_part(
                     folder / f"part-{state['parts']:08d}.npz",

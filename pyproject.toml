@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "avf-spline-generator"
-version = "0.1.0"
+version = "0.2.0"
 description = "Trace H/V fibre predictions into AFV splines"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -13,6 +13,8 @@ dependencies = ["numpy>=1.24,<3", "scipy>=1.10,<2", "numba>=0.59,<0.65", "filelo
 
 [project.optional-dependencies]
 zarr = ["zarr>=2.16,<3"]
+compressed = ["zarr>=2.16,<3", "numcodecs>=0.12,<0.16"]
+test = ["pytest>=7", "zarr>=2.16,<3", "numcodecs>=0.12,<0.16"]
 
 [project.scripts]
 avf-spline-generator = "avf_spline_generator.cli:main"

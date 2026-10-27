@@ -22,6 +22,9 @@ pip install .
 For Zarr inputs, use `pip install '.[zarr]'`. NumPy, SciPy, Numba and filelock
 are the required dependencies. A GPU is optional.
 
+For full scrolls with limited scratch disk space, install
+`pip install '.[compressed]'` and use `--storage compressed` (see below).
+
 ## Inputs
 
 - A NumPy `.npy` array or local Zarr v2 array with shape **`(2, Z, Y, X)`**.
@@ -88,6 +91,8 @@ native_XYZ = tracing_XYZ * 2 + 0.5 + origin_XYZ
 | `--device cpu/cuda` | `cpu` | Centrality and ridge-detection backend. |
 | `--cuda-device` | `0` | Device index within the visible CUDA devices. |
 | `--native-cache-mib` | `128` | Native prediction chunk cache. |
+| `--storage dense/compressed` | `dense` | Dense NPY or sparse lossless Zarr working fields. |
+| `--field-cache-mib` | `1024` | Compressed-mode tracing cache, minimum 16 MiB; not total process RAM. |
 | `--resume` | Off | Continue a run in the same work directory. |
 
 `--device cuda` requires an NVIDIA driver and a CUDA toolkit supported by the
@@ -125,7 +130,38 @@ a silently shortened fibre. The default export adds no further length cutoff.
 
 ## Large volumes and resuming
 
-Dense working fields are memory-mapped on disk. They require approximately
+### Compressed working fields
+
+Use the same command with `--storage compressed` to avoid full-size dense scratch
+arrays. Preparation writes directly into sparse Zarr v2 arrays with lossless
+Blosc/Zstandard compression. Empty chunks are omitted. Tracing reads through a
+bounded RAM cache and saves evicted coverage blocks without loss. Fibres continue
+across chunk boundaries using the same tracing kernels and seed order.
+
+```bash
+pip install '.[compressed]'
+avf-spline-generator \
+  --predictions predictions.zarr --array semantic \
+  --tracing-predictions predictions.zarr --tracing-array tracing \
+  --voxel-size-um 8.64 \
+  --storage compressed --field-cache-mib 16384 \
+  --output fibers.afv --work-dir spline-work
+```
+
+Use your scan's native voxel size. This runs on one machine; a GPU is optional.
+The example allocates up to 16 GiB to the tracing-field cache. The default is
+1 GiB; smaller caches may perform more I/O. Parallel smoothing can require an
+additional immutable presence snapshot up to the same budget. Preparation and
+seed sorting use additional RAM. The compression ratio depends on the data;
+no fixed disk reduction is promised.
+
+The seed coordinate catalogue and saved curves still require disk space. Seed
+sorting retains the RAM requirements below. See [storage details](docs/storage.md)
+for layout, memory accounting, continuation and parity tests.
+
+### Dense working fields
+
+With the default `--storage dense`, working fields are memory-mapped on disk. They require approximately
 **18 bytes per tracing voxel** for both families, in addition to input data,
 seed catalogues, saved curve batches and the AFV output. A tracing grid contains
 about one eighth as many voxels as the native volume. These working files are
@@ -142,6 +178,10 @@ an interrupted batch is retraced. Input paths, shapes, settings and file
 size/modification-time signatures are checked. These signatures do not replace
 the requirement to keep inputs immutable.
 
+Keep `--storage` unchanged when resuming. The compressed cache budget may be
+changed on resume. Existing dense work directories from release 0.1.0 remain
+supported; converting an in-progress dense work directory is not implemented.
+
 The final AFV is published only after SQLite integrity and spatial-index checks.
 An existing output file is never overwritten. To export a different length cutoff,
 use the same work directory with `--resume`, a new output path and
@@ -153,6 +193,13 @@ This package consumes predictions; it does not run the neural network or read CT
 The output is prediction-derived geometry. CT-based exterior filtering is not
 applied. Model weights, training, surface reconstruction and deployment services
 are separate from this tool.
+
+## Validation
+
+`pip install '.[test]'` followed by `python -m pytest -q` runs the storage-parity
+and restart tests. The numerical tracing core and AFV writer are unchanged from
+the dense release. Validation scope and measurements are recorded in
+[docs/validation.md](docs/validation.md).
 
 ## License
 
